@@ -24,6 +24,7 @@ import { startAccountRecorder } from "./scheduler/accountRecorder";
 import { PriceOrderMonitor } from "./scheduler/priceOrderMonitor";
 import { startHealthCheck } from "./scheduler/healthCheck";
 import { inconsistentStateResolver } from "./scheduler/inconsistentStateResolver";
+import { startPartialTakeProfitMonitor, stopPartialTakeProfitMonitor } from "./scheduler/partialTakeProfitMonitor";
 import { emailAlertService } from "./utils/emailAlert";
 import { initDatabase } from "./database/init";
 import { RISK_PARAMS } from "./config/riskParams";
@@ -138,7 +139,16 @@ async function main() {
     logger.info("条件单监控服务已禁用（PRICE_ORDER_MONITOR_ENABLED=false）");
   }
   
-  // 9. 启动自动修复服务（可选）
+  // 9. 启动分批止盈实时监控服务
+  const partialTpMonitorEnabled = process.env.PARTIAL_TP_MONITOR_ENABLED !== 'false';
+  if (partialTpMonitorEnabled) {
+    logger.info("启动分批止盈实时监控服务...");
+    startPartialTakeProfitMonitor();
+  } else {
+    logger.info("分批止盈实时监控已禁用（PARTIAL_TP_MONITOR_ENABLED=false）");
+  }
+
+  // 10. 启动自动修复服务（可选）
   const autoResolveEnabled = process.env.AUTO_RESOLVE_ENABLED === 'true';
   if (autoResolveEnabled) {
     logger.info("启动自动修复服务...");
@@ -174,22 +184,27 @@ process.on("unhandledRejection", (reason: unknown) => {
 // 优雅退出处理
 async function gracefulShutdown(signal: string) {
   logger.info(`\n\n收到 ${signal} 信号，正在关闭系统...`);
-  
+
   try {
+    // 停止分批止盈监控服务
+    logger.info("正在停止分批止盈监控服务...");
+    stopPartialTakeProfitMonitor();
+    logger.info("分批止盈监控服务已停止");
+
     // 停止条件单监控服务
     if (priceOrderMonitor) {
       logger.info("正在停止条件单监控服务...");
       priceOrderMonitor.stop();
       logger.info("条件单监控服务已停止");
     }
-    
+
     // 关闭服务器
     if (server) {
       logger.info("正在关闭 Web 服务器...");
       server.close();
       logger.info("Web 服务器已关闭");
     }
-    
+
     logger.info("系统已安全关闭");
     process.exit(0);
   } catch (error) {
