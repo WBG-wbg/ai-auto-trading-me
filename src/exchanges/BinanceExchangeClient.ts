@@ -40,6 +40,20 @@ const logger = createLogger({
   level: "info",
 });
 
+/**
+ * 安全的 JSON 解析，保护大整数不丢失精度
+ * 将大整数字段（如 orderId）转换为字符串
+ */
+function safeJsonParse(text: string): any {
+  // 使用正则替换：将数字字段（如 "orderId": 123456789... ）转为字符串
+  // 匹配超过安全整数范围的数字（16位以上）
+  const safeText = text.replace(
+    /"(\w+)"\s*:\s*(\d{16,})/g,  // 匹配 "key": 大数字
+    (match, key, value) => `"${key}":"${value}"`  // 转为字符串
+  );
+  return JSON.parse(safeText);
+}
+
 export class BinanceExchangeClient implements IExchangeClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
@@ -410,8 +424,9 @@ export class BinanceExchangeClient implements IExchangeClient {
             
             throw new Error(errorMsg);
           }
-          
-          const error = await response.json();
+
+          const errorText = await response.text();
+          const error = safeJsonParse(errorText);
           
           // 🔥 特殊处理: IP被封禁 (-1003)
           if (error.code === -1003) {
@@ -481,9 +496,10 @@ export class BinanceExchangeClient implements IExchangeClient {
 
         // 请求成功，记录成功状态并解析JSON
         this.recordSuccess();
-        
+
         try {
-          return await response.json();
+          const text = await response.text();
+          return safeJsonParse(text);
         } catch (jsonError: any) {
           // JSON解析失败，可能是返回了HTML
           const text = await response.text().catch(() => 'Unable to read response');
@@ -634,8 +650,9 @@ export class BinanceExchangeClient implements IExchangeClient {
               await new Promise(resolve => setTimeout(resolve, Math.min(1000 * attempt, 3000)));
               continue;
             }
-            
-            const error = await response.json();
+
+            const errorText = await response.text();
+            const error = safeJsonParse(errorText);
             
             // 🔥 特殊处理: IP被封禁 (-1003)
             if (error.code === -1003) {
@@ -691,7 +708,8 @@ export class BinanceExchangeClient implements IExchangeClient {
 
           // 安全地解析JSON
           try {
-            return await response.json();
+            const text = await response.text();
+            return safeJsonParse(text);
           } catch (jsonError: any) {
             const text = await response.text().catch(() => 'Unable to read response');
             logger.error(`JSON解析失败: ${jsonError.message}`);
