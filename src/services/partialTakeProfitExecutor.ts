@@ -34,14 +34,28 @@ class DistributedLock {
   private static readonly LOCK_TIMEOUT_MS = 30000; // 30秒锁超时
 
   /**
-   * 尝试获取锁
+   * 尝试获取锁（使用原子操作避免竞态条件）
    * @param key 锁的键
    * @param holder 锁持有者标识
    * @returns true-获取成功, false-锁被占用
    */
   static async tryAcquire(key: string, holder: string): Promise<boolean> {
     try {
-      // 检查是否已有锁
+      const now = new Date().toISOString();
+      const lockTimeoutSeconds = this.LOCK_TIMEOUT_MS / 1000;
+
+      // 🔧 修复竞态条件：使用原子操作
+      // 方案：先清理过期锁，再尝试插入（如果不存在）
+
+      // 1. 清理过期锁（原子操作）
+      await dbClient.execute({
+        sql: `DELETE FROM system_config
+              WHERE key = ?
+              AND (julianday('now') - julianday(updated_at)) * 86400 >= ?`,
+        args: [key, lockTimeoutSeconds]
+      });
+
+      // 2. 检查是否是自己持有的锁（需要刷新时间）
       const checkResult = await dbClient.execute({
         sql: 'SELECT value, updated_at FROM system_config WHERE key = ?',
         args: [key]
@@ -50,36 +64,54 @@ class DistributedLock {
       if (checkResult.rows.length > 0) {
         const lockValue = checkResult.rows[0].value as string;
         const lockTime = new Date(checkResult.rows[0].updated_at as string).getTime();
-        const now = Date.now();
-        const lockAge = now - lockTime;
+        const lockAge = Date.now() - lockTime;
 
-        // 如果锁未过期，检查是否是自己持有的锁
-        if (lockAge < this.LOCK_TIMEOUT_MS) {
-          if (lockValue === holder) {
-            // 自己持有的锁，刷新时间
-            await dbClient.execute({
-              sql: 'UPDATE system_config SET updated_at = ? WHERE key = ?',
-              args: [new Date().toISOString(), key]
-            });
-            return true;
-          }
-          // 其他服务持有的锁
-          logger.debug(`锁 ${key} 被 ${lockValue} 持有，剩余 ${Math.ceil((this.LOCK_TIMEOUT_MS - lockAge) / 1000)}秒`);
-          return false;
+        if (lockValue === holder) {
+          // 自己持有的锁，刷新时间
+          await dbClient.execute({
+            sql: 'UPDATE system_config SET updated_at = ? WHERE key = ? AND value = ?',
+            args: [now, key, holder]
+          });
+          logger.debug(`🔄 ${holder} 刷新锁: ${key}`);
+          return true;
         }
 
-        // 锁已过期，可以抢占
-        logger.warn(`锁 ${key} 已过期(${lockValue})，强制获取`);
+        // 其他服务持有的锁
+        logger.debug(`锁 ${key} 被 ${lockValue} 持有，剩余 ${Math.ceil((this.LOCK_TIMEOUT_MS - lockAge) / 1000)}秒`);
+        return false;
       }
 
-      // 获取锁
-      await dbClient.execute({
-        sql: 'INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES (?, ?, ?)',
-        args: [key, holder, new Date().toISOString()]
+      // 3. 尝试获取锁（原子操作：仅在不存在时插入）
+      // 使用 INSERT 而不是 INSERT OR REPLACE，避免覆盖其他进程的锁
+      try {
+        await dbClient.execute({
+          sql: `INSERT INTO system_config (key, value, updated_at)
+                SELECT ?, ?, ?
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM system_config WHERE key = ?
+                )`,
+          args: [key, holder, now, key]
+        });
+      } catch (insertError: any) {
+        // 插入失败说明其他进程已经获取了锁
+        logger.debug(`锁 ${key} 获取失败（已被占用）`);
+        return false;
+      }
+
+      // 4. 验证是否成功获取锁（双重检查）
+      const verifyResult = await dbClient.execute({
+        sql: 'SELECT value FROM system_config WHERE key = ?',
+        args: [key]
       });
 
-      logger.debug(`✅ ${holder} 获取锁: ${key}`);
-      return true;
+      if (verifyResult.rows.length > 0 && verifyResult.rows[0].value === holder) {
+        logger.debug(`✅ ${holder} 获取锁: ${key}`);
+        return true;
+      }
+
+      // 验证失败，说明被其他进程抢占了
+      logger.debug(`锁 ${key} 验证失败（被其他进程抢占）`);
+      return false;
     } catch (error: any) {
       logger.error(`获取锁失败: ${error.message}`);
       return false;
