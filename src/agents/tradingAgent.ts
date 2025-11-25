@@ -711,6 +711,22 @@ ${params.scientificStopLoss?.enabled ? `│ 移动止损优化（可选，低优
 【决策流程 - 按优先级执行】
 (1) 持仓管理（最优先）：
 
+   ⚠️⚠️⚠️ 特别注意：独立反转监控线程预警（最最优先，超越一切）⭐⭐⭐⭐⭐⭐
+   说明：独立反转监控线程每3分钟检测一次反转风险，如检测到风险会在持仓信息中标记
+   
+   ├─ 如果持仓显示"【反转监控紧急预警】预警得分 ≥ 50"
+   │  → 立即全部平仓 closePosition({ symbol, reason: 'reversal_warning' })
+   │  → ⚠️ 这是独立监控线程的强制预警，优先级高于一切其他判断！
+   │  → ⚠️ 不要质疑、不要犹豫、不要考虑其他因素，立即执行！
+   │
+   ├─ 如果持仓显示"【反转监控预警】预警得分 30-49"
+   │  → 密切关注，结合下面的reversalAnalysis综合判断
+   │  → 优先级高于常规趋势分析，但允许综合评估
+   │
+   └─ 如果持仓显示"【反转监控状态】无预警标记"
+      → 说明监控线程未检测到风险，按正常流程处理
+      → 继续执行下面的步骤1-4
+
    步骤1：趋势反转紧急检查（最高优先级，每个持仓必查）⭐⭐⭐⭐⭐
    ├─ 检查 reversalAnalysis.reversalScore ≥ 60
    │  → 立即全部平仓 closePosition({ symbol, reason: 'trend_reversal' })
@@ -773,6 +789,7 @@ ${params.scientificStopLoss?.enabled ? `│ 移动止损优化（可选，低优
    
    【决策流程总结】
    优先级排序（从高到低）：
+   0. 独立反转监控预警 ≥ 50分（看持仓信息中的【反转监控紧急预警】标记）→ 立即平仓，跳过所有后续步骤
    1. reversalScore ≥ 60（强烈反转）→ 立即全部平仓，跳过所有后续步骤
    2. 分批止盈检查 → 执行后跳过步骤3和4
    3. reversalScore 40-60（中等风险）→ 建议平仓
@@ -781,12 +798,14 @@ ${params.scientificStopLoss?.enabled ? `│ 移动止损优化（可选，低优
    6. 移动止损优化（可选）→ 锦上添花
    
    【决策冲突处理】
+   • 独立监控预警 ≥ 50：无条件立即平仓，优先级绝对最高（看持仓信息标记）
    • reversalScore ≥ 60：无条件立即平仓，忽略分批止盈机会
    • reversalScore < 60 且执行分批止盈：跳过步骤3和4，下周期重新评估
    • reversalScore < 60 且无分批止盈机会：执行步骤3风险评估
    • 只有"无反转风险 + 无分批止盈"时，才执行步骤4移动止损
    
    ⚠️ 核心原则：
+   • 独立反转监控预警（≥50）> 一切其他考虑，这是独立线程的强制判断
    • 趋势强烈反转（≥60）> 一切其他考虑，必须立即退出
    • 分批止盈优先于移动止损（已包含止损移动）
    • "接近止损线"不是主动平仓理由（交易所条件单自动触发）
@@ -1166,6 +1185,12 @@ ${params.scientificStopLoss?.enabled ? `│ 移动止损优化（可选，低优
       const maxCycles = Math.floor(36 * 60 / intervalMinutes); // 36小时的总周期数
       const remainingCycles = Math.max(0, maxCycles - holdingCycles);
       
+      // ⭐ 读取反转预警标记（独立反转监控线程设置）
+      const metadata = pos.metadata || {};
+      const hasReversalWarning = metadata.reversalWarning === 1;
+      const warningScore = metadata.warningScore || 0;
+      const warningTime = metadata.warningTime || null;
+      
       prompt += `当前活跃持仓: ${pos.symbol} ${pos.side === 'long' ? '做多' : '做空'}\n`;
       prompt += `  杠杆倍数: ${pos.leverage}x\n`;
       prompt += `  盈亏百分比: ${pnlPercent >= 0 ? '+' : ''}${formatPercent(pnlPercent)}% (已考虑杠杆倍数)\n`;
@@ -1175,6 +1200,25 @@ ${params.scientificStopLoss?.enabled ? `│ 移动止损优化（可选，低优
       prompt += `  开仓时间: ${formatChinaTime(pos.opened_at)}\n`;
       prompt += `  已持仓: ${holdingHours} 小时 (${holdingMinutes} 分钟, ${holdingCycles} 个周期)\n`;
       prompt += `  距离36小时限制: ${formatPercent(remainingHours, 1)} 小时 (${remainingCycles} 个周期)\n`;
+      
+      // ⭐ 始终显示反转监控状态（明确告知AI是否有预警）
+      if (hasReversalWarning && warningScore >= 30) {
+        // 有预警标记
+        if (warningScore >= 50) {
+          prompt += `  ⚠️⚠️⚠️ 【反转监控紧急预警】独立反转监控线程检测到强烈反转信号！\n`;
+          prompt += `  ├─ 预警得分: ${warningScore.toFixed(0)}/100 (≥50分，高危)\n`;
+          prompt += `  ├─ 预警时间: ${warningTime ? formatChinaTime(warningTime) : '未知'}\n`;
+          prompt += `  └─ 💡 【立即平仓】优先级最高，立即调用 closePosition({ symbol: '${pos.symbol}', reason: 'reversal_warning' })\n`;
+        } else {
+          prompt += `  ⚠️ 【反转监控预警】独立反转监控线程检测到早期反转信号\n`;
+          prompt += `  ├─ 预警得分: ${warningScore.toFixed(0)}/100 (30-49分，中等风险)\n`;
+          prompt += `  ├─ 预警时间: ${warningTime ? formatChinaTime(warningTime) : '未知'}\n`;
+          prompt += `  └─ 💡 密切关注，结合市场分析判断是否平仓\n`;
+        }
+      } else {
+        // 无预警标记（正常状态）
+        prompt += `  ✅ 【反转监控状态】无预警标记 (reversalScore < 30 或监控线程未检测到风险)\n`;
+      }
       
       // 如果接近36小时,添加警告
       if (remainingHours < 2) {

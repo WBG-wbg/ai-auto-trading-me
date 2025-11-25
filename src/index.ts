@@ -98,8 +98,18 @@ async function main() {
   } else {
     logger.info("健康检查服务已禁用（HEALTH_CHECK_ENABLED=false）");
   }
+  
+  // 8. 启动反转监控线程（新增）
+  const reversalMonitorEnabled = process.env.REVERSAL_MONITOR_ENABLED !== 'false';
+  if (reversalMonitorEnabled) {
+    logger.info("启动反转监控线程...");
+    const { startReversalMonitor } = await import('./scheduler/reversalMonitor');
+    startReversalMonitor();
+  } else {
+    logger.info("反转监控线程已禁用（REVERSAL_MONITOR_ENABLED=false）");
+  }
 
-  // 8. 启动条件单监控服务
+  // 9. 启动条件单监控服务
   const monitorEnabled = process.env.PRICE_ORDER_MONITOR_ENABLED !== 'false';
   if (monitorEnabled) {
     try {
@@ -139,6 +149,7 @@ async function main() {
     logger.info("条件单监控服务已禁用（PRICE_ORDER_MONITOR_ENABLED=false）");
   }
   
+
   // 9. 启动分批止盈实时监控服务
   const partialTpMonitorEnabled = process.env.PARTIAL_TP_MONITOR_ENABLED !== 'false';
   if (partialTpMonitorEnabled) {
@@ -148,6 +159,7 @@ async function main() {
     logger.info("分批止盈实时监控已禁用（PARTIAL_TP_MONITOR_ENABLED=false）");
   }
 
+  
   // 10. 启动自动修复服务（可选）
   const autoResolveEnabled = process.env.AUTO_RESOLVE_ENABLED === 'true';
   if (autoResolveEnabled) {
