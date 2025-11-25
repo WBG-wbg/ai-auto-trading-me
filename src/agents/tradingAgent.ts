@@ -435,12 +435,12 @@ export function getStrategyParams(strategy: TradingStrategy): StrategyParams {
         good: `${balancedLevGood}倍`,
         strong: `${balancedLevStrong}倍`,
       },
-      positionSizeMin: 10,
-      positionSizeMax: 20,
+      positionSizeMin: 4,
+      positionSizeMax: 10,
       positionSizeRecommend: {
-        normal: "10-14%",
-        good: "14-16%",
-        strong: "16-20%",
+        normal: "4-6%",
+        good: "6-8%",
+        strong: "8-10%",
       },
       // 科学止损配置（优先使用）
       scientificStopLoss: {
@@ -468,26 +468,26 @@ export function getStrategyParams(strategy: TradingStrategy): StrategyParams {
         // 平衡策略：基于R倍数的标准分批止盈
         enabled: true,
         stage1: {
-          rMultiple: 1,
+          rMultiple: 0.8,
           closePercent: 33.33,
           moveStopTo: 'entry',
-          description: '1R平仓1/3，止损移至成本价（标准保本）',
+          description: '0.8R平仓1/3，止损移至成本价（标准保本）',
         },
         stage2: {
-          rMultiple: 2,
+          rMultiple: 1.7,
           closePercent: 33.33,
           moveStopTo: 'previous',
-          description: '2R平仓1/3，止损移至1R（标准锁利）',
+          description: '1.7R平仓1/3，止损移至0.8R（标准锁利）',
         },
         stage3: {
-          rMultiple: 3,
+          rMultiple: 2.5,
           closePercent: 0,
           useTrailingStop: true,
-          description: '3R+启用移动止损（标准趋势追踪）',
+          description: '2.5R+启用移动止损（标准趋势追踪）',
         },
         extremeTakeProfit: {
-          rMultiple: 5,
-          description: '5R极限止盈兜底',
+          rMultiple: 4,
+          description: '4R极限止盈兜底',
         },
       },
       partialTakeProfitLegacy: {

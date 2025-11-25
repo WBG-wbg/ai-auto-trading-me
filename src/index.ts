@@ -150,7 +150,7 @@ async function main() {
   }
   
 
-  // 9. 启动分批止盈实时监控服务
+  // 10. 启动分批止盈实时监控服务
   const partialTpMonitorEnabled = process.env.PARTIAL_TP_MONITOR_ENABLED !== 'false';
   if (partialTpMonitorEnabled) {
     logger.info("启动分批止盈实时监控服务...");
@@ -159,8 +159,8 @@ async function main() {
     logger.info("分批止盈实时监控已禁用（PARTIAL_TP_MONITOR_ENABLED=false）");
   }
 
-  
-  // 10. 启动自动修复服务（可选）
+
+  // 11. 启动自动修复服务（可选）
   const autoResolveEnabled = process.env.AUTO_RESOLVE_ENABLED === 'true';
   if (autoResolveEnabled) {
     logger.info("启动自动修复服务...");
