@@ -468,16 +468,16 @@ export function getStrategyParams(strategy: TradingStrategy): StrategyParams {
         // 平衡策略：基于R倍数的标准分批止盈
         enabled: true,
         stage1: {
-          rMultiple: 0.8,
+          rMultiple: 1,
           closePercent: 33.33,
           moveStopTo: 'entry',
-          description: '0.8R平仓1/3，止损移至成本价（标准保本）',
+          description: '1R平仓1/3，止损移至成本价（标准保本）',
         },
         stage2: {
           rMultiple: 1.7,
           closePercent: 33.33,
           moveStopTo: 'previous',
-          description: '1.7R平仓1/3，止损移至0.8R（标准锁利）',
+          description: '1.7R平仓1/3，止损移至1R（标准锁利）',
         },
         stage3: {
           rMultiple: 2.5,

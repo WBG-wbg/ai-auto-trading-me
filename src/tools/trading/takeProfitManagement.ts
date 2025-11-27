@@ -32,12 +32,13 @@ import { getExchangeClient } from "../../exchanges";
 import { createClient } from "@libsql/client";
 import { createLogger } from "../../utils/logger";
 import { getChinaTimeISO } from "../../utils/timeUtils";
-import { 
-  formatStopLossPrice, 
+import {
+  formatStopLossPrice,
   calculatePartialCloseQuantity,
   getDecimalPlacesBySymbol
 } from "../../utils/priceFormatter";
 import { calculateATR } from "../../services/stopLossCalculator";
+import { getTradingStrategy, getStrategyParams } from "../../agents/tradingAgent";
 
 const logger = createLogger({
   name: "take-profit-management",
@@ -640,18 +641,23 @@ export const partialTakeProfitTool = createTool({
         };
       }
       
-      // 6. 根据阶段执行不同逻辑（应用波动率调整）
+      // 6. 获取当前策略的分批止盈配置
+      const currentStrategy = getTradingStrategy();
+      const strategyParams = getStrategyParams(currentStrategy);
+      const tpConfig = strategyParams.partialTakeProfit;
+
+      // 根据阶段执行不同逻辑（应用波动率调整）
       const stageNum = Number.parseInt(stage, 10);
-      let baseRequiredR: number;    // 基础R倍数要求
+      let baseRequiredR: number;    // 基础R倍数要求（从配置读取）
       let requiredR: number;        // 动态调整后的R倍数要求
       let closePercent: number;
       let newStopLossPrice: number | undefined;
-      
+
       if (stageNum === 1) {
-        // 阶段1: 1R，平仓 1/3，止损移至成本价
-        baseRequiredR = 1;
+        // 阶段1: 从配置读取R倍数，平仓配置的百分比，止损移至成本价
+        baseRequiredR = tpConfig.stage1.rMultiple;
         requiredR = adjustRMultipleForVolatility(baseRequiredR, volatility);
-        closePercent = 33.33;
+        closePercent = tpConfig.stage1.closePercent;
         newStopLossPrice = entryPrice;
         
         logger.info(`${symbol} 阶段1 R倍数要求: 基础=${baseRequiredR}R, 调整后=${requiredR.toFixed(2)}R (${volatility.level}波动)`);
@@ -671,10 +677,10 @@ export const partialTakeProfitTool = createTool({
           };
         }
       } else if (stageNum === 2) {
-        // 阶段2: 2R，平仓 1/3，止损移至 1R
-        baseRequiredR = 2;
+        // 阶段2: 从配置读取R倍数，平仓配置的百分比，止损移至前一阶段R位置
+        baseRequiredR = tpConfig.stage2.rMultiple;
         requiredR = adjustRMultipleForVolatility(baseRequiredR, volatility);
-        closePercent = 33.33;
+        closePercent = tpConfig.stage2.closePercent;
         
         // 检查阶段1是否已执行
         const stage1History = history.filter((h) => h.stage === 1);
@@ -685,8 +691,8 @@ export const partialTakeProfitTool = createTool({
           };
         }
         
-        // 🔧 止损移至 1R 位置（使用原始止损价计算，不受波动率影响）
-        newStopLossPrice = calculateTargetPrice(entryPrice, originalStopLoss, 1, side);
+        // 🔧 止损移至 Stage1 的R位置（使用原始止损价计算，不受波动率影响）
+        newStopLossPrice = calculateTargetPrice(entryPrice, originalStopLoss, tpConfig.stage1.rMultiple, side);
         
         logger.info(`${symbol} 阶段2 R倍数要求: 基础=${baseRequiredR}R, 调整后=${requiredR.toFixed(2)}R (${volatility.level}波动)`);
         
@@ -705,10 +711,10 @@ export const partialTakeProfitTool = createTool({
           };
         }
       } else if (stageNum === 3) {
-        // 阶段3: 3R+，不平仓，启用移动止损
-        baseRequiredR = 3;
+        // 阶段3: 从配置读取R倍数，不平仓，启用移动止损
+        baseRequiredR = tpConfig.stage3.rMultiple;
         requiredR = adjustRMultipleForVolatility(baseRequiredR, volatility);
-        closePercent = 0;
+        closePercent = tpConfig.stage3.closePercent;
         
         // 检查阶段1和2是否已执行
         const stage1History = history.filter((h) => h.stage === 1);
@@ -1458,16 +1464,21 @@ export const checkPartialTakeProfitOpportunityTool = createTool({
           }
         }
         
+        // 获取当前策略的分批止盈配置
+        const currentStrategy = getTradingStrategy();
+        const strategyParams = getStrategyParams(currentStrategy);
+        const tpConfig = strategyParams.partialTakeProfit;
+
         // 分析市场波动率
         const volatility = await analyzeMarketVolatility(symbol, "15m");
-        
+
         // 计算R倍数（使用原始止损价）
         const currentR = calculateRMultiple(entryPrice, currentPrice, originalStopLoss, side);
-        
-        // 计算动态调整后的R倍数要求
-        const adjustedR1 = adjustRMultipleForVolatility(1, volatility);
-        const adjustedR2 = adjustRMultipleForVolatility(2, volatility);
-        const adjustedR3 = adjustRMultipleForVolatility(3, volatility);
+
+        // 计算动态调整后的R倍数要求（从配置读取基础R倍数）
+        const adjustedR1 = adjustRMultipleForVolatility(tpConfig.stage1.rMultiple, volatility);
+        const adjustedR2 = adjustRMultipleForVolatility(tpConfig.stage2.rMultiple, volatility);
+        const adjustedR3 = adjustRMultipleForVolatility(tpConfig.stage3.rMultiple, volatility);
         
         // 获取历史（使用实际的数据库符号和开仓订单ID）
         logger.info(`🔍 查询 ${symbol} 的已执行阶段: actualDbSymbol=${actualDbSymbol}, positionOrderId=${positionOrderId || 'NULL'}`);

@@ -16,7 +16,8 @@
 import { createClient } from "@libsql/client";
 import { createLogger } from "../utils/logger";
 import { getExchangeClient } from "../exchanges";
-import { calculateRMultiple } from "../tools/trading/takeProfitManagement";
+import { calculateRMultiple, adjustRMultipleForVolatility, analyzeMarketVolatility } from "../tools/trading/takeProfitManagement";
+import { getTradingStrategy, getStrategyParams } from "../agents/tradingAgent";
 
 const logger = createLogger({
   name: "partial-tp-executor",
@@ -198,6 +199,11 @@ export class PartialTakeProfitExecutor {
         return { success: true, executed: 0, skipped: 0, details: [] };
       }
 
+      // 获取当前策略的分批止盈配置
+      const currentStrategy = getTradingStrategy();
+      const strategyParams = getStrategyParams(currentStrategy);
+      const tpConfig = strategyParams.partialTakeProfit;
+
       const exchangeClient = getExchangeClient();
 
       for (const pos of dbPositions.rows) {
@@ -224,14 +230,51 @@ export class PartialTakeProfitExecutor {
 
         if (currentPrice <= 0) continue;
 
-        // 计算当前R倍数
-        const riskDistance = Math.abs(entryPrice - stopLossPrice);
-        if (riskDistance === 0) continue;
+        // 🔧 关键修复：如果已执行过分批止盈，需要从历史记录恢复原始止损价来计算R倍数
+        // 因为Stage1执行后止损价会移到入场价，导致风险距离为0，无法计算后续Stage2/Stage3
+        let originalStopLoss = stopLossPrice;
 
-        const currentR = calculateRMultiple(entryPrice, currentPrice, stopLossPrice, side);
+        try {
+          // 查询是否有分批止盈历史
+          const historyResult = await dbClient.execute({
+            sql: 'SELECT stage, trigger_price, new_stop_loss_price FROM partial_take_profit_history WHERE symbol = ? AND status = \'completed\' ORDER BY stage ASC LIMIT 1',
+            args: [symbol]
+          });
 
-        // 检查Stage1条件（≥1R）
-        if (currentR >= 1.0) {
+          if (historyResult.rows.length > 0) {
+            const firstStage = historyResult.rows[0];
+            const stage = Number(firstStage.stage);
+            const triggerPrice = parseFloat(firstStage.trigger_price as string || '0');
+
+            if (stage === 1 && triggerPrice > 0) {
+              // Stage1后止损=成本价，通过triggerPrice反推原始止损价
+              // triggerPrice = entry + 1R = entry + (entry - originalStopLoss)
+              // 所以: originalStopLoss = 2 * entry - triggerPrice
+              originalStopLoss = 2 * entryPrice - triggerPrice;
+              logger.debug(`${symbol} 从Stage1历史恢复原始止损价: ${originalStopLoss.toFixed(2)} (当前止损=${stopLossPrice.toFixed(2)})`);
+            }
+          }
+        } catch (historyError: any) {
+          logger.debug(`查询${symbol}分批止盈历史失败: ${historyError.message}`);
+          // 失败时继续使用当前止损价
+        }
+
+        // 计算当前R倍数（使用原始止损价）
+        const riskDistance = Math.abs(entryPrice - originalStopLoss);
+        if (riskDistance === 0) {
+          logger.debug(`${symbol} 风险距离为0，无法计算R倍数，跳过`);
+          continue;
+        }
+
+        const currentR = calculateRMultiple(entryPrice, currentPrice, originalStopLoss, side);
+
+        // 分析市场波动率并计算动态调整后的R倍数阈值
+        const volatility = await analyzeMarketVolatility(symbol, "15m");
+        const adjustedR1 = adjustRMultipleForVolatility(tpConfig.stage1.rMultiple, volatility);
+        const adjustedR2 = adjustRMultipleForVolatility(tpConfig.stage2.rMultiple, volatility);
+
+        // 检查Stage1条件（使用配置的R倍数 + 波动率调整）
+        if (currentR >= adjustedR1) {
           const lockKey = `partial_tp_${symbol}_${side}_stage1`;
           
           // 检查是否最近已执行
@@ -290,8 +333,8 @@ export class PartialTakeProfitExecutor {
           }
         }
 
-        // 检查Stage2条件（≥2R）
-        if (currentR >= 2.0) {
+        // 检查Stage2条件（使用配置的R倍数 + 波动率调整）
+        if (currentR >= adjustedR2) {
           const lockKey = `partial_tp_${symbol}_${side}_stage2`;
           
           // 检查是否最近已执行
