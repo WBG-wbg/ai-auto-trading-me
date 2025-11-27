@@ -272,6 +272,11 @@ export class PartialTakeProfitExecutor {
         const volatility = await analyzeMarketVolatility(symbol, "15m");
         const adjustedR1 = adjustRMultipleForVolatility(tpConfig.stage1.rMultiple, volatility);
         const adjustedR2 = adjustRMultipleForVolatility(tpConfig.stage2.rMultiple, volatility);
+        const adjustedR3 = adjustRMultipleForVolatility(tpConfig.stage3.rMultiple, volatility);
+        // 极限止盈阈值（如果配置了）
+        const extremeTPR = tpConfig.extremeTakeProfit?.rMultiple
+          ? adjustRMultipleForVolatility(tpConfig.extremeTakeProfit.rMultiple, volatility)
+          : null;
 
         // 检查Stage1条件（使用配置的R倍数 + 波动率调整）
         if (currentR >= adjustedR1) {
@@ -391,6 +396,80 @@ export class PartialTakeProfitExecutor {
             // 释放锁
             await DistributedLock.release(lockKey, caller);
           }
+        }
+
+        // 检查Stage3条件（使用配置的R倍数 + 波动率调整）
+        if (currentR >= adjustedR3) {
+          const lockKey = `partial_tp_${symbol}_${side}_stage3`;
+
+          // 检查是否最近已执行
+          const hasRecent = await DistributedLock.hasRecentExecution(symbol, 3, 30);
+          if (hasRecent) {
+            logger.debug(`${symbol} Stage3 最近30秒内已执行，跳过`);
+            skippedCount++;
+            executed.push({ symbol, stage: 3, result: 'recently_executed' });
+            continue;
+          }
+
+          // 尝试获取锁
+          const lockAcquired = await DistributedLock.tryAcquire(lockKey, caller);
+          if (!lockAcquired) {
+            logger.debug(`${symbol} Stage3 锁被占用，跳过`);
+            skippedCount++;
+            executed.push({ symbol, stage: 3, result: 'lock_busy' });
+            continue;
+          }
+
+          try {
+            // 检查是否已执行Stage3
+            const historyCheck = await dbClient.execute({
+              sql: 'SELECT COUNT(*) as count FROM partial_take_profit_history WHERE symbol = ? AND stage = 3 AND status = \'completed\'',
+              args: [symbol]
+            });
+
+            const stage3Executed = Number(historyCheck.rows[0]?.count || 0) > 0;
+
+            if (!stage3Executed) {
+              logger.info(`🎯 [${caller}] ${symbol} 达到 ${currentR.toFixed(2)}R，自动执行Stage3（启用移动止损）`);
+
+              // 动态导入工具，避免循环依赖
+              const { partialTakeProfitTool } = await import('../tools/trading/takeProfitManagement');
+
+              const result = await partialTakeProfitTool.execute!({
+                symbol: symbol.replace('_USDT', '').replace('USDT', ''),
+                stage: '3'
+              }) as any;
+
+              if (result.success) {
+                logger.info(`✅ [${caller}] ${symbol} Stage3 自动执行成功: ${result.message}`);
+                executedCount++;
+                executed.push({ symbol, stage: 3, result: 'success' });
+              } else {
+                logger.warn(`⚠️ [${caller}] ${symbol} Stage3 执行失败: ${result.message}`);
+                executed.push({ symbol, stage: 3, result: 'failed' });
+              }
+            } else {
+              skippedCount++;
+              executed.push({ symbol, stage: 3, result: 'already_executed' });
+            }
+          } finally {
+            // 释放锁
+            await DistributedLock.release(lockKey, caller);
+          }
+        }
+
+        // 检查极限止盈条件（如果配置了）
+        if (extremeTPR && currentR >= extremeTPR) {
+          // 极限止盈：直接全部平仓
+          logger.info(`🚨 [${caller}] ${symbol} 达到极限止盈 ${currentR.toFixed(2)}R (阈值=${extremeTPR.toFixed(2)}R)，建议全部平仓`);
+
+          // 注意：极限止盈不自动执行，只记录日志
+          // 可以根据需要调用平仓工具或发送通知
+          executed.push({
+            symbol,
+            stage: 4,
+            result: 'extreme_take_profit_triggered'
+          });
         }
       }
 
