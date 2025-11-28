@@ -441,7 +441,8 @@ export async function trendFollowingStrategy(
   direction: "long" | "short",
   marketState: MarketStateAnalysis,
   tf15m: any,
-  tf1h: any
+  tf1h: any,
+  tf4h?: any // ⭐ 新增：可选的4小时数据（用于大趋势确认）
 ) {
   // 转换时间框架数据格式
   const timeframe15m: TimeframeAnalysis = {
@@ -465,7 +466,43 @@ export async function trendFollowingStrategy(
     rsi14: tf1h.rsi14,
     klines: tf1h.candles ? convertToKlines(tf1h.candles) : undefined, // ⭐ 传递K线数据供高级分析使用
   };
-  
+
+  // ⭐ 新增：4小时大趋势验证（如果提供了4小时数据）
+  if (tf4h) {
+    const has4hUptrend = tf4h.ema20 > tf4h.ema50;
+    const has4hDowntrend = tf4h.ema20 < tf4h.ema50;
+
+    // 做多时，4小时必须是上涨趋势
+    if (direction === "long" && !has4hUptrend) {
+      return {
+        symbol,
+        action: 'wait',
+        confidence: 'low',
+        signalStrength: 0,
+        recommendedLeverage: 0,
+        marketState: marketState.state,
+        strategyType: 'trend_following',
+        reason: `4小时大趋势未确认上涨（EMA20=${tf4h.ema20.toFixed(2)} < EMA50=${tf4h.ema50.toFixed(2)}），拒绝做多`,
+        keyMetrics: extractKeyMetrics(timeframe15m, timeframe1h),
+      };
+    }
+
+    // 做空时，4小时必须是下跌趋势
+    if (direction === "short" && !has4hDowntrend) {
+      return {
+        symbol,
+        action: 'wait',
+        confidence: 'low',
+        signalStrength: 0,
+        recommendedLeverage: 0,
+        marketState: marketState.state,
+        strategyType: 'trend_following',
+        reason: `4小时大趋势未确认下跌（EMA20=${tf4h.ema20.toFixed(2)} > EMA50=${tf4h.ema50.toFixed(2)}），拒绝做空`,
+        keyMetrics: extractKeyMetrics(timeframe15m, timeframe1h),
+      };
+    }
+  }
+
   // 调用相应的策略函数
   if (direction === "long") {
     return trendFollowingLongSignal(symbol, timeframe15m, timeframe1h, marketState);

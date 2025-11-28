@@ -53,12 +53,14 @@ export async function routeStrategy(
   const marketState = await analyzeMarketState(symbol, currentPosition);
   
   // 2. 获取多时间框架数据（供策略使用）
-  const mtfData = await performMultiTimeframeAnalysis(symbol, ["SHORT_CONFIRM", "MEDIUM"]);
-  
+  // ⭐ 新增：添加4小时时间框架作为大趋势过滤器
+  const mtfData = await performMultiTimeframeAnalysis(symbol, ["SHORT_CONFIRM", "MEDIUM", "MEDIUM_LONG"]);
+
   const tf15m = mtfData.timeframes.shortconfirm;
   const tf1h = mtfData.timeframes.medium;
-  
-  if (!tf15m || !tf1h) {
+  const tf4h = mtfData.timeframes.mediumlong;
+
+  if (!tf15m || !tf1h || !tf4h) {
     return {
       symbol,
       action: "wait",
@@ -82,20 +84,74 @@ export async function routeStrategy(
     };
   }
   
-  // 3. 根据市场状态路由到相应策略
+  // 3. ⭐ 新增：4小时大趋势过滤器（避免逆势交易）
+  const has4hUptrend = tf4h.ema20 > tf4h.ema50;
+  const has4hDowntrend = tf4h.ema20 < tf4h.ema50;
+
+  logger.debug(`${symbol} 4小时趋势: EMA20=${tf4h.ema20.toFixed(2)}, EMA50=${tf4h.ema50.toFixed(2)}, 方向=${has4hUptrend ? '上涨' : has4hDowntrend ? '下跌' : '震荡'}`);
+
+  // 4. 根据市场状态路由到相应策略
   let baseResult: any;
-  
+
   switch (marketState.state) {
     case "uptrend_oversold":
       // 上涨趋势中的超卖 -> 趋势跟踪做多
-      logger.info(`${symbol}: 上涨趋势中的超卖，使用趋势跟踪做多策略`);
-      baseResult = await trendFollowingStrategy(symbol, "long", marketState, tf15m, tf1h);
+      // ⭐ 4小时过滤：必须4小时也是上涨趋势
+      if (!has4hUptrend) {
+        logger.info(`${symbol}: 1小时上涨但4小时趋势不一致，拒绝做多`);
+        baseResult = {
+          symbol,
+          action: "wait",
+          confidence: "low",
+          signalStrength: 0,
+          recommendedLeverage: 0,
+          marketState: marketState.state,
+          strategyType: "trend_following",
+          reason: "4小时大趋势未确认上涨，拒绝做多（避免逆势）",
+          keyMetrics: {
+            rsi7: tf15m.rsi7,
+            rsi14: tf15m.rsi14,
+            macd: tf1h.macd,
+            ema20: tf1h.ema20,
+            ema50: tf1h.ema50,
+            price: tf15m.currentPrice,
+            atrRatio: tf1h.atrRatio,
+          },
+        };
+        break;
+      }
+      logger.info(`${symbol}: 上涨趋势中的超卖，4小时趋势一致，使用趋势跟踪做多策略`);
+      baseResult = await trendFollowingStrategy(symbol, "long", marketState, tf15m, tf1h, tf4h);
       break;
       
     case "downtrend_overbought":
       // 下跌趋势中的超买 -> 趋势跟踪做空
-      logger.info(`${symbol}: 下跌趋势中的超买，使用趋势跟踪做空策略`);
-      baseResult = await trendFollowingStrategy(symbol, "short", marketState, tf15m, tf1h);
+      // ⭐ 4小时过滤：必须4小时也是下跌趋势
+      if (!has4hDowntrend) {
+        logger.info(`${symbol}: 1小时下跌但4小时趋势不一致，拒绝做空`);
+        baseResult = {
+          symbol,
+          action: "wait",
+          confidence: "low",
+          signalStrength: 0,
+          recommendedLeverage: 0,
+          marketState: marketState.state,
+          strategyType: "trend_following",
+          reason: "4小时大趋势未确认下跌，拒绝做空（避免逆势）",
+          keyMetrics: {
+            rsi7: tf15m.rsi7,
+            rsi14: tf15m.rsi14,
+            macd: tf1h.macd,
+            ema20: tf1h.ema20,
+            ema50: tf1h.ema50,
+            price: tf15m.currentPrice,
+            atrRatio: tf1h.atrRatio,
+          },
+        };
+        break;
+      }
+      logger.info(`${symbol}: 下跌趋势中的超买，4小时趋势一致，使用趋势跟踪做空策略`);
+      baseResult = await trendFollowingStrategy(symbol, "short", marketState, tf15m, tf1h, tf4h);
       break;
       
     case "downtrend_oversold":
@@ -112,14 +168,22 @@ export async function routeStrategy(
       
     case "uptrend_continuation":
       // 上涨趋势延续 -> 趋势跟踪做多（较低置信度）
+      // ⭐ 4小时过滤：建议4小时也是上涨趋势（但不强制，因为是趋势延续）
+      if (!has4hUptrend) {
+        logger.warn(`${symbol}: 上涨趋势延续，但4小时趋势不一致，谨慎做多`);
+      }
       logger.info(`${symbol}: 上涨趋势延续，使用趋势跟踪做多策略`);
-      baseResult = await trendFollowingStrategy(symbol, "long", marketState, tf15m, tf1h);
+      baseResult = await trendFollowingStrategy(symbol, "long", marketState, tf15m, tf1h, tf4h);
       break;
-      
+
     case "downtrend_continuation":
       // 下跌趋势延续 -> 趋势跟踪做空（较低置信度）
+      // ⭐ 4小时过滤：建议4小时也是下跌趋势（但不强制，因为是趋势延续）
+      if (!has4hDowntrend) {
+        logger.warn(`${symbol}: 下跌趋势延续，但4小时趋势不一致，谨慎做空`);
+      }
       logger.info(`${symbol}: 下跌趋势延续，使用趋势跟踪做空策略`);
-      baseResult = await trendFollowingStrategy(symbol, "short", marketState, tf15m, tf1h);
+      baseResult = await trendFollowingStrategy(symbol, "short", marketState, tf15m, tf1h, tf4h);
       break;
       
     case "ranging_oversold":
