@@ -1098,12 +1098,9 @@ ${params.scientificStopLoss?.enabled ? `│ 移动止损优化（可选，低优
       prompt += `多时间框架指标：\n\n`;
       
       const tfList = [
-        { key: "1m", name: "1分钟" },
-        { key: "3m", name: "3分钟" },
-        { key: "5m", name: "5分钟" },
         { key: "15m", name: "15分钟" },
-        { key: "30m", name: "30分钟" },
         { key: "1h", name: "1小时" },
+        { key: "4h", name: "4小时" },
       ];
       
       for (const tf of tfList) {
@@ -1638,7 +1635,7 @@ function generateInstructions(strategy: TradingStrategy, intervalMinutes: number
    - **做空机会**：当市场呈现下跌趋势时，开空单同样能获利
    - **关键认知**：下跌中做空和上涨中做多同样能赚钱，不要只盯着做多机会
    - 永续合约做空没有借币成本，只需关注资金费率即可
-5. **多时间框架分析**：您分析多个时间框架（15分钟、30分钟、1小时、4小时）的模式，以识别高概率入场点。${params.entryCondition}。
+5. **多时间框架分析**：您分析多个时间框架（15分钟、1小时、4小时）的模式，以识别高概率入场点。${params.entryCondition}。
 6. **仓位管理（${params.name}策略）**：${params.riskTolerance}。最多同时持有${RISK_PARAMS.MAX_POSITIONS}个持仓。
 7. **交易频率**：${params.tradingStyle}
 8. **杠杆的合理运用（${params.name}策略）**：您必须使用${params.leverageMin}-${params.leverageMax}倍杠杆，根据信号强度灵活选择：
@@ -1951,7 +1948,7 @@ function generateInstructions(strategy: TradingStrategy, intervalMinutes: number
 
 3. 分析市场数据（必须实际调用工具）：
    - 调用 getTechnicalIndicators 获取技术指标数据
-   - 分析多个时间框架（15分钟、30分钟、1小时、4小时）
+   - 分析多个时间框架（15分钟、1小时、4小时）
    - 重点关注：价格、EMA、MACD、RSI、成交量
    - ${params.entryCondition}
 
@@ -2031,11 +2028,11 @@ function generateInstructions(strategy: TradingStrategy, intervalMinutes: number
       情况B：盈利状态下的趋势明确反转（谨慎判断）
       必须同时满足：
       - 持仓必须盈利（pnl_percent > 0）
-      - 至少3个关键时间框架同时确认趋势反转（15分钟+30分钟+1小时）
+      - 至少3个关键时间框架同时确认趋势反转（15分钟+1小时+4小时）
       - 价格突破关键支撑位（多单）或阻力位（空单）并且回踩确认
       - 持仓方向与新确认的趋势完全相反
       - MACD和RSI多个周期共同确认反转
-      - 决策说明必须详细："[币种][做多/做空]持仓出现明确反转：[15分钟EMA死叉/金叉]+[30分钟MACD转负/正]+[1小时RSI跌破/突破50]，主动平仓保护利润"
+      - 决策说明必须详细："[币种][做多/做空]持仓出现明确反转：[15分钟EMA死叉/金叉]+[1小时MACD转负/正]+[4小时RSI跌破/突破50]，主动平仓保护利润"
       - ❌ 禁止理由："可能反转"、"趋势似乎减弱"（必须是明确反转）
       
       情况C：绝对禁止的平仓理由（即使持仓得分很低）
