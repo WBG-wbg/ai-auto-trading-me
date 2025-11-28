@@ -10,8 +10,12 @@ import {
   calculateVolatilityAdjustment,
   calculateRecommendedLeverage,
   standardizeStrategyResult,
+  analyzePriceStructure,
+  confirmVolumeSupport,
+  checkPullbackPosition,
   type StandardizedStrategyResult,
   type TimeframeAnalysis,
+  type Candle,
 } from './strategyUtils';
 
 /**
@@ -46,6 +50,27 @@ export function trendFollowingLongSignal(
       reason: '1小时级别无上涨趋势',
       keyMetrics: extractKeyMetrics(timeframe15m, timeframe1h),
     };
+  }
+
+  // 1.5. ⭐ 新增：价格结构确认（避免在山顶买入）
+  if (timeframe1h.klines && timeframe1h.klines.length >= 30) {
+    const priceStructure = analyzePriceStructure(timeframe1h.klines, 30);
+    if (!priceStructure.isUptrend) {
+      return {
+        symbol,
+        action: 'wait',
+        confidence: 'low',
+        signalStrength: 0,
+        recommendedLeverage: 0,
+        marketState: marketState.state,
+        strategyType: 'trend_following',
+        reason: `价格结构未确认上涨趋势: ${priceStructure.reason}`,
+        keyMetrics: extractKeyMetrics(timeframe15m, timeframe1h),
+      };
+    }
+    if (priceStructure.confidence < 0.6) {
+      warnings.push(`价格结构置信度较低(${(priceStructure.confidence * 100).toFixed(0)}%)，建议谨慎`);
+    }
   }
 
   // 2. 检查1小时动量
@@ -85,6 +110,27 @@ export function trendFollowingLongSignal(
       warnings.push('价格还在EMA20下方，可能回调未结束');
     }
 
+    // 5.5. ⭐ 新增：回调位置验证（避免追高）
+    const pullbackCheck = checkPullbackPosition(
+      timeframe15m.close,
+      timeframe15m.ema20,
+      timeframe1h.ema50,
+      'long'
+    );
+    if (!pullbackCheck.isValid) {
+      return {
+        symbol,
+        action: 'wait',
+        confidence: 'low',
+        signalStrength: 0,
+        recommendedLeverage: 0,
+        marketState: marketState.state,
+        strategyType: 'trend_following',
+        reason: pullbackCheck.reason,
+        keyMetrics: extractKeyMetrics(timeframe15m, timeframe1h),
+      };
+    }
+
     // 6. 计算信号强度（回调做多）
     const alignmentCheck = checkMultiTimeframeAlignment(timeframe15m, timeframe1h, 'long');
     signalStrength = calculateSignalStrength({
@@ -96,6 +142,18 @@ export function trendFollowingLongSignal(
       pricePosition: ((timeframe15m.close - timeframe15m.ema20) / timeframe15m.ema20) * 100,
       trendConsistency: alignmentCheck.score,
     });
+
+    // 6.5. ⭐ 新增：成交量确认
+    if (timeframe15m.klines && timeframe15m.klines.length >= 10) {
+      const volumeCheck = confirmVolumeSupport(timeframe15m.klines, 'up', 10);
+      if (!volumeCheck.isSupported) {
+        warnings.push(volumeCheck.reason);
+        signalStrength *= 0.7; // 成交量不足，降低信号强度
+      } else if (volumeCheck.level === 'strong') {
+        signalStrength *= 1.1; // 成交量强劲，提升信号强度
+        warnings.push('成交量确认强劲，趋势可靠性高');
+      }
+    }
   }
 
   // 7. 波动率调整
@@ -186,6 +244,27 @@ export function trendFollowingShortSignal(
     };
   }
 
+  // 1.5. ⭐ 新增：价格结构确认（避免在谷底卖出）
+  if (timeframe1h.klines && timeframe1h.klines.length >= 30) {
+    const priceStructure = analyzePriceStructure(timeframe1h.klines, 30);
+    if (!priceStructure.isDowntrend) {
+      return {
+        symbol,
+        action: 'wait',
+        confidence: 'low',
+        signalStrength: 0,
+        recommendedLeverage: 0,
+        marketState: marketState.state,
+        strategyType: 'trend_following',
+        reason: `价格结构未确认下跌趋势: ${priceStructure.reason}`,
+        keyMetrics: extractKeyMetrics(timeframe15m, timeframe1h),
+      };
+    }
+    if (priceStructure.confidence < 0.6) {
+      warnings.push(`价格结构置信度较低(${(priceStructure.confidence * 100).toFixed(0)}%)，建议谨慎`);
+    }
+  }
+
   // 2. 检查1小时动量
   const momentumNegative = timeframe1h.macd < 0;
   if (!momentumNegative) {
@@ -223,6 +302,27 @@ export function trendFollowingShortSignal(
       warnings.push('价格还在EMA20上方，可能反弹未结束');
     }
 
+    // 5.5. ⭐ 新增：反弹位置验证（避免追跌）
+    const pullbackCheck = checkPullbackPosition(
+      timeframe15m.close,
+      timeframe15m.ema20,
+      timeframe1h.ema50,
+      'short'
+    );
+    if (!pullbackCheck.isValid) {
+      return {
+        symbol,
+        action: 'wait',
+        confidence: 'low',
+        signalStrength: 0,
+        recommendedLeverage: 0,
+        marketState: marketState.state,
+        strategyType: 'trend_following',
+        reason: pullbackCheck.reason,
+        keyMetrics: extractKeyMetrics(timeframe15m, timeframe1h),
+      };
+    }
+
     // 6. 计算信号强度（反弹做空）
     const alignmentCheck = checkMultiTimeframeAlignment(timeframe15m, timeframe1h, 'short');
     signalStrength = calculateSignalStrength({
@@ -234,6 +334,18 @@ export function trendFollowingShortSignal(
       pricePosition: ((timeframe15m.close - timeframe15m.ema20) / timeframe15m.ema20) * 100,
       trendConsistency: alignmentCheck.score,
     });
+
+    // 6.5. ⭐ 新增：成交量确认
+    if (timeframe15m.klines && timeframe15m.klines.length >= 10) {
+      const volumeCheck = confirmVolumeSupport(timeframe15m.klines, 'down', 10);
+      if (!volumeCheck.isSupported) {
+        warnings.push(volumeCheck.reason);
+        signalStrength *= 0.7; // 成交量不足，降低信号强度
+      } else if (volumeCheck.level === 'strong') {
+        signalStrength *= 1.1; // 成交量强劲，提升信号强度
+        warnings.push('成交量确认强劲，趋势可靠性高');
+      }
+    }
   }
 
   // 7. 波动率调整
@@ -307,6 +419,21 @@ function extractKeyMetrics(timeframe15m: TimeframeAnalysis, timeframe1h: Timefra
 }
 
 /**
+ * 转换K线数据格式
+ * 兼容不同交易所的数据格式
+ */
+function convertToKlines(candles: any[]): Candle[] {
+  return candles.map((c: any) => ({
+    timestamp: c.timestamp || c.t || 0,
+    open: Number.parseFloat(c.open || c.o || '0'),
+    high: Number.parseFloat(c.high || c.h || '0'),
+    low: Number.parseFloat(c.low || c.l || '0'),
+    close: Number.parseFloat(c.close || c.c || '0'),
+    volume: Number.parseFloat(c.volume || c.v || '0'),
+  }));
+}
+
+/**
  * 趋势跟踪策略包装函数（用于策略路由器）
  */
 export async function trendFollowingStrategy(
@@ -325,8 +452,9 @@ export async function trendFollowingStrategy(
     macdSignal: tf15m.macdSignal || 0,
     rsi7: tf15m.rsi7,
     rsi14: tf15m.rsi14,
+    klines: tf15m.candles ? convertToKlines(tf15m.candles) : undefined, // ⭐ 传递K线数据供高级分析使用
   };
-  
+
   const timeframe1h: TimeframeAnalysis = {
     close: tf1h.currentPrice,
     ema20: tf1h.ema20,
@@ -335,6 +463,7 @@ export async function trendFollowingStrategy(
     macdSignal: tf1h.macdSignal || 0,
     rsi7: tf1h.rsi7,
     rsi14: tf1h.rsi14,
+    klines: tf1h.candles ? convertToKlines(tf1h.candles) : undefined, // ⭐ 传递K线数据供高级分析使用
   };
   
   // 调用相应的策略函数

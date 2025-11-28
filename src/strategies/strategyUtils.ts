@@ -5,6 +5,16 @@
 
 import type { MarketState } from '../types/marketState';
 
+// K线数据接口
+export interface Candle {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
 // 时间框架分析数据接口
 export interface TimeframeAnalysis {
   ema20: number;
@@ -14,6 +24,7 @@ export interface TimeframeAnalysis {
   macd: number;
   macdSignal: number;
   close: number;
+  klines?: Candle[]; // 可选的K线数据，用于高级分析
 }
 
 /**
@@ -366,5 +377,258 @@ export function detectVolumeSpike(
     isSpike,
     ratio: Number(ratio.toFixed(2)),
     level,
+  };
+}
+
+/**
+ * 🎯 分析价格结构（高低点趋势）
+ * 判断是否形成更高的高点和更高的低点（上涨结构）或更低的高点和更低的低点（下跌结构）
+ * 这是避免追高追低的关键！
+ */
+export function analyzePriceStructure(
+  candles: Candle[],
+  lookback: number = 30
+): {
+  isUptrend: boolean;
+  isDowntrend: boolean;
+  confidence: number; // 0-1
+  highs: number[];
+  lows: number[];
+  reason: string;
+} {
+  if (candles.length < lookback) {
+    return {
+      isUptrend: false,
+      isDowntrend: false,
+      confidence: 0,
+      highs: [],
+      lows: [],
+      reason: 'K线数据不足',
+    };
+  }
+
+  const recentCandles = candles.slice(-lookback);
+  const swingHighs: number[] = [];
+  const swingLows: number[] = [];
+
+  // 找出摆动高点和低点（比前后K线都高/低的点）
+  for (let i = 2; i < recentCandles.length - 2; i++) {
+    const curr = recentCandles[i];
+    const prev = recentCandles[i - 1];
+    const prev2 = recentCandles[i - 2];
+    const next = recentCandles[i + 1];
+    const next2 = recentCandles[i + 2];
+
+    // 摆动高点：比前后2根K线都高
+    if (
+      curr.high > prev.high &&
+      curr.high > prev2.high &&
+      curr.high > next.high &&
+      curr.high > next2.high
+    ) {
+      swingHighs.push(curr.high);
+    }
+
+    // 摆动低点：比前后2根K线都低
+    if (
+      curr.low < prev.low &&
+      curr.low < prev2.low &&
+      curr.low < next.low &&
+      curr.low < next2.low
+    ) {
+      swingLows.push(curr.low);
+    }
+  }
+
+  // 至少需要3个高点和3个低点来判断趋势
+  if (swingHighs.length < 3 || swingLows.length < 3) {
+    return {
+      isUptrend: false,
+      isDowntrend: false,
+      confidence: 0,
+      highs: swingHighs,
+      lows: swingLows,
+      reason: `摆动点不足（高点:${swingHighs.length}, 低点:${swingLows.length}）`,
+    };
+  }
+
+  // 取最近的3个高点和低点
+  const recentHighs = swingHighs.slice(-3);
+  const recentLows = swingLows.slice(-3);
+
+  // 判断上涨结构：高点抬高 + 低点抬高
+  const highsRising =
+    recentHighs[2] > recentHighs[1] && recentHighs[1] > recentHighs[0];
+  const lowsRising =
+    recentLows[2] > recentLows[1] && recentLows[1] > recentLows[0];
+
+  // 判断下跌结构：高点降低 + 低点降低
+  const highsFalling =
+    recentHighs[2] < recentHighs[1] && recentHighs[1] < recentHighs[0];
+  const lowsFalling =
+    recentLows[2] < recentLows[1] && recentLows[1] < recentLows[0];
+
+  // 计算置信度
+  let confidence = 0;
+  if (highsRising && lowsRising) {
+    confidence = 0.9;
+  } else if (highsRising || lowsRising) {
+    confidence = 0.5;
+  } else if (highsFalling && lowsFalling) {
+    confidence = 0.9;
+  } else if (highsFalling || lowsFalling) {
+    confidence = 0.5;
+  }
+
+  let reason = '';
+  if (highsRising && lowsRising) {
+    reason = '上涨结构明确：高点抬高+低点抬高';
+  } else if (highsFalling && lowsFalling) {
+    reason = '下跌结构明确：高点降低+低点降低';
+  } else if (highsRising) {
+    reason = '高点抬高但低点未抬高，结构不明确';
+  } else if (lowsFalling) {
+    reason = '低点降低但高点未降低，结构不明确';
+  } else {
+    reason = '震荡结构，无明确趋势';
+  }
+
+  return {
+    isUptrend: highsRising && lowsRising,
+    isDowntrend: highsFalling && lowsFalling,
+    confidence,
+    highs: recentHighs,
+    lows: recentLows,
+    reason,
+  };
+}
+
+/**
+ * 🎯 成交量趋势确认
+ * 真正的趋势必须有成交量配合
+ */
+export function confirmVolumeSupport(
+  candles: Candle[],
+  direction: 'up' | 'down',
+  lookback: number = 10
+): {
+  isSupported: boolean;
+  volumeRatio: number;
+  level: 'strong' | 'moderate' | 'weak';
+  reason: string;
+} {
+  if (candles.length < lookback || !candles[0].volume) {
+    return {
+      isSupported: false,
+      volumeRatio: 0,
+      level: 'weak',
+      reason: '成交量数据不足',
+    };
+  }
+
+  const recentCandles = candles.slice(-lookback);
+  const volumes = recentCandles.map((c) => c.volume || 0);
+  const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+
+  // 最近3根K线的平均成交量
+  const last3Volumes = volumes.slice(-3);
+  const last3Avg = last3Volumes.reduce((a, b) => a + b, 0) / 3;
+
+  const volumeRatio = last3Avg / avgVolume;
+
+  let isSupported = false;
+  let level: 'strong' | 'moderate' | 'weak' = 'weak';
+  let reason = '';
+
+  if (direction === 'up') {
+    // 上涨时成交量应该放大
+    if (volumeRatio >= 1.5) {
+      isSupported = true;
+      level = 'strong';
+      reason = `上涨成交量强劲放大（${volumeRatio.toFixed(2)}倍）`;
+    } else if (volumeRatio >= 1.2) {
+      isSupported = true;
+      level = 'moderate';
+      reason = `上涨成交量适度放大（${volumeRatio.toFixed(2)}倍）`;
+    } else {
+      reason = `上涨但成交量未放大（${volumeRatio.toFixed(2)}倍），警惕假突破`;
+    }
+  } else {
+    // 下跌时也应该有成交量
+    if (volumeRatio >= 1.3) {
+      isSupported = true;
+      level = 'strong';
+      reason = `下跌成交量强劲放大（${volumeRatio.toFixed(2)}倍）`;
+    } else if (volumeRatio >= 1.0) {
+      isSupported = true;
+      level = 'moderate';
+      reason = `下跌成交量稳定（${volumeRatio.toFixed(2)}倍）`;
+    } else {
+      reason = `下跌但成交量萎缩（${volumeRatio.toFixed(2)}倍），可能接近底部`;
+    }
+  }
+
+  return {
+    isSupported,
+    volumeRatio: Number(volumeRatio.toFixed(2)),
+    level,
+    reason,
+  };
+}
+
+/**
+ * 🎯 检查价格是否在回调/反弹的合理位置
+ * 避免追高追低的关键检查
+ */
+export function checkPullbackPosition(
+  currentPrice: number,
+  ema20: number,
+  ema50: number,
+  direction: 'long' | 'short'
+): {
+  isValid: boolean;
+  distanceFromEma20: number; // 百分比
+  distanceFromEma50: number; // 百分比
+  reason: string;
+} {
+  const distFromEma20 = ((currentPrice - ema20) / ema20) * 100;
+  const distFromEma50 = ((currentPrice - ema50) / ema50) * 100;
+
+  let isValid = false;
+  let reason = '';
+
+  if (direction === 'long') {
+    // 做多：价格应该在EMA20-EMA50之间或略低于EMA20
+    if (currentPrice >= ema50 && currentPrice <= ema20 * 1.02) {
+      isValid = true;
+      reason = '价格在EMA20-EMA50之间，回调位置理想';
+    } else if (currentPrice > ema20 * 1.02 && distFromEma50 <= 5) {
+      isValid = true;
+      reason = `价格略高于EMA20但距EMA50仅${distFromEma50.toFixed(1)}%，可接受`;
+    } else if (currentPrice > ema50 && distFromEma50 > 5) {
+      reason = `价格距EMA50过远（${distFromEma50.toFixed(1)}%），避免追高`;
+    } else {
+      reason = '价格低于EMA50，趋势支撑不足';
+    }
+  } else {
+    // 做空：价格应该在EMA50-EMA20之间或略高于EMA20
+    if (currentPrice <= ema50 && currentPrice >= ema20 * 0.98) {
+      isValid = true;
+      reason = '价格在EMA50-EMA20之间，反弹位置理想';
+    } else if (currentPrice < ema20 * 0.98 && Math.abs(distFromEma50) <= 5) {
+      isValid = true;
+      reason = `价格略低于EMA20但距EMA50仅${Math.abs(distFromEma50).toFixed(1)}%，可接受`;
+    } else if (currentPrice < ema50 && Math.abs(distFromEma50) > 5) {
+      reason = `价格距EMA50过远（${Math.abs(distFromEma50).toFixed(1)}%），避免追跌`;
+    } else {
+      reason = '价格高于EMA50，趋势阻力过强';
+    }
+  }
+
+  return {
+    isValid,
+    distanceFromEma20: Number(distFromEma20.toFixed(2)),
+    distanceFromEma50: Number(distFromEma50.toFixed(2)),
+    reason,
   };
 }
