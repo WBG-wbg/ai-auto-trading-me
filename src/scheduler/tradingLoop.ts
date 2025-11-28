@@ -117,7 +117,8 @@ async function collectMarketData() {
       const candles15m = await exchangeClient.getFuturesCandles(contract, "15m", 96);  // 24小时，完整一天
       const candles30m = await exchangeClient.getFuturesCandles(contract, "30m", 120); // 2.5天，中期趋势
       const candles1h = await exchangeClient.getFuturesCandles(contract, "1h", 168);   // 7天完整一周，周级别分析
-      
+      const candles4h = await exchangeClient.getFuturesCandles(contract, "4h", 168);   // 28天，大趋势过滤
+
       // 计算每个时间框架的指标
       const indicators1m = calculateIndicators(candles1m);
       const indicators3m = calculateIndicators(candles3m);
@@ -125,6 +126,7 @@ async function collectMarketData() {
       const indicators15m = calculateIndicators(candles15m);
       const indicators30m = calculateIndicators(candles30m);
       const indicators1h = calculateIndicators(candles1h);
+      const indicators4h = calculateIndicators(candles4h);
       
       // 计算3分钟时序指标（使用全部60个数据计算，但只显示最近10个数据点）
       const intradaySeries = calculateIntradaySeries(candles3m);
@@ -150,6 +152,7 @@ async function collectMarketData() {
           "15m": candles15m.length,
           "30m": candles30m.length,
           "1h": candles1h.length,
+          "4h": candles4h.length,
         }
       };
       
@@ -225,6 +228,7 @@ async function collectMarketData() {
           "15m": indicators15m,
           "30m": indicators30m,
           "1h": indicators1h,
+          "4h": indicators4h,
         },
       };
       
