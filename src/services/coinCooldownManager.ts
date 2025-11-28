@@ -50,6 +50,8 @@ interface CooldownRecord {
 
 /**
  * 检查币种是否在冷静期
+ *
+ * ⚠️ 已禁用：失败惩罚机制已关闭，始终允许交易
  */
 export async function isSymbolInCooldown(symbol: string): Promise<{
   inCooldown: boolean;
@@ -57,9 +59,13 @@ export async function isSymbolInCooldown(symbol: string): Promise<{
   cooldownUntil?: string;
   remainingHours?: number;
 }> {
+  // 🔧 失败惩罚机制已禁用 - 始终返回 inCooldown: false
+  return { inCooldown: false };
+
+  /* 原始冷静期逻辑已禁用
   try {
     const now = new Date();
-    
+
     // 查询24小时内的亏损记录（从position_close_events表）
     const result = await dbClient.execute({
       sql: `SELECT symbol, pnl_percent, close_reason, created_at
@@ -70,24 +76,24 @@ export async function isSymbolInCooldown(symbol: string): Promise<{
             ORDER BY created_at DESC`,
       args: [symbol],
     });
-    
+
     if (!result.rows || result.rows.length === 0) {
       return { inCooldown: false };
     }
-    
+
     const losses = result.rows.map((row: any) => ({
       symbol: row.symbol,
       lossPercent: Math.abs(Number.parseFloat(row.pnl_percent || "0")),
       closeReason: row.close_reason,
       closedAt: row.created_at,
     }));
-    
+
     // 规则1: 单次亏损 ≥ 15%，冷静期12小时
     const recentLoss = losses[0];
     if (recentLoss.lossPercent >= 15) {
       const closedTime = new Date(recentLoss.closedAt);
       const cooldownUntil = new Date(closedTime.getTime() + 12 * 60 * 60 * 1000);
-      
+
       if (now < cooldownUntil) {
         const remainingHours = (cooldownUntil.getTime() - now.getTime()) / (1000 * 60 * 60);
         return {
@@ -98,12 +104,12 @@ export async function isSymbolInCooldown(symbol: string): Promise<{
         };
       }
     }
-    
+
     // 规则2: 24小时内亏损2次，冷静期24小时
     if (losses.length >= 2) {
       const closedTime = new Date(losses[0].closedAt);
       const cooldownUntil = new Date(closedTime.getTime() + 24 * 60 * 60 * 1000);
-      
+
       if (now < cooldownUntil) {
         const remainingHours = (cooldownUntil.getTime() - now.getTime()) / (1000 * 60 * 60);
         return {
@@ -114,12 +120,12 @@ export async function isSymbolInCooldown(symbol: string): Promise<{
         };
       }
     }
-    
+
     // 规则3: 24小时内亏损 ≥ 3次，冷静期48小时
     if (losses.length >= 3) {
       const closedTime = new Date(losses[0].closedAt);
       const cooldownUntil = new Date(closedTime.getTime() + 48 * 60 * 60 * 1000);
-      
+
       if (now < cooldownUntil) {
         const remainingHours = (cooldownUntil.getTime() - now.getTime()) / (1000 * 60 * 60);
         return {
@@ -130,14 +136,14 @@ export async function isSymbolInCooldown(symbol: string): Promise<{
         };
       }
     }
-    
+
     // 规则4: 趋势反转平仓，额外冷静期6小时
     const hasReversalLoss = losses.some(l => l.closeReason === 'trend_reversal');
     if (hasReversalLoss) {
       const reversalLoss = losses.find(l => l.closeReason === 'trend_reversal')!;
       const closedTime = new Date(reversalLoss.closedAt);
       const cooldownUntil = new Date(closedTime.getTime() + 6 * 60 * 60 * 1000);
-      
+
       if (now < cooldownUntil) {
         const remainingHours = (cooldownUntil.getTime() - now.getTime()) / (1000 * 60 * 60);
         return {
@@ -148,13 +154,14 @@ export async function isSymbolInCooldown(symbol: string): Promise<{
         };
       }
     }
-    
+
     return { inCooldown: false };
   } catch (error: any) {
     logger.error(`检查冷静期失败 ${symbol}:`, error);
     // 出错时保守处理，不阻止交易
     return { inCooldown: false };
   }
+  */
 }
 
 /**
@@ -233,6 +240,8 @@ export async function getSymbolLossStats(symbol: string): Promise<{
 
 /**
  * 计算历史失败对评分的惩罚
+ *
+ * ⚠️ 已禁用：失败惩罚机制已关闭，不对历史亏损进行评分惩罚
  */
 export function calculateHistoricalLossPenalty(stats: {
   losses24h: number;
@@ -240,12 +249,16 @@ export function calculateHistoricalLossPenalty(stats: {
   avgLossPercent24h: number;
   hasReversalLoss: boolean;
 }): number {
+  // 🔧 失败惩罚机制已禁用 - 始终返回 0（无惩罚）
+  return 0;
+
+  /* 原始惩罚逻辑已禁用
   let penalty = 0;
-  
+
   // 24小时内有亏损记录
   if (stats.losses24h > 0) {
     penalty += 20; // 基础惩罚
-    
+
     // 平均亏损越大，惩罚越重
     if (stats.avgLossPercent24h >= 20) {
       penalty += 15;
@@ -255,16 +268,17 @@ export function calculateHistoricalLossPenalty(stats: {
       penalty += 5;
     }
   }
-  
+
   // 48小时内亏损2次以上
   if (stats.losses48h >= 2) {
     penalty += 20;
   }
-  
+
   // 有趋势反转亏损
   if (stats.hasReversalLoss) {
     penalty += 15;
   }
-  
+
   return penalty;
+  */
 }

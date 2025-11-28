@@ -117,7 +117,7 @@ async function collectMarketData() {
       const candles15m = await exchangeClient.getFuturesCandles(contract, "15m", 96);  // 24小时，完整一天
       const candles30m = await exchangeClient.getFuturesCandles(contract, "30m", 120); // 2.5天，中期趋势
       const candles1h = await exchangeClient.getFuturesCandles(contract, "1h", 168);   // 7天完整一周，周级别分析
-      const candles4h = await exchangeClient.getFuturesCandles(contract, "4h", 168);   // 28天，大趋势过滤
+      const candles4h = await exchangeClient.getFuturesCandles(contract, "4h", 42);   // 7天，大趋势过滤
 
       // 计算每个时间框架的指标
       const indicators1m = calculateIndicators(candles1m);
