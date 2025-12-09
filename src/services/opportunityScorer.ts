@@ -36,11 +36,12 @@ import type {
   StrategyResult,
   MarketStateAnalysis 
 } from "../types/marketState";
-import { 
-  getSymbolLossStats, 
-  calculateHistoricalLossPenalty,
-  isSymbolInCooldown 
-} from "./coinCooldownManager";
+// 冷静期和惩罚功能已禁用
+// import {
+//   getSymbolLossStats,
+//   calculateHistoricalLossPenalty,
+//   isSymbolInCooldown
+// } from "./coinCooldownManager";
 
 const logger = createLogger({
   name: "opportunity-scorer",
@@ -278,47 +279,44 @@ export async function scoreOpportunity(
   // 5. 流动性评分（策略化 + 动态成交量）
   const volume24h = strategyResult.keyMetrics.volume24h;
   const liquidityScore = calculateLiquidityScore(strategyResult.symbol, currentStrategy, volume24h) * weights.liquidity;
-  
-  // 6. 历史失败惩罚（新增）
-  let historicalPenalty = 0;
-  let trendStabilityPenalty = 0;
-  let volatilityPenalty = 0;
-  
-  try {
-    const lossStats = await getSymbolLossStats(strategyResult.symbol);
-    historicalPenalty = calculateHistoricalLossPenalty(lossStats);
-    
-    // 7. 趋势稳定性惩罚（新增）
-    if (marketState.trendChanges) {
-      // 如果主框架或确认框架趋势减弱 > 40%，降低评分
-      if (marketState.trendChanges.primary.weakeningSeverity > 40) {
-        trendStabilityPenalty += 10;
-      }
-      if (marketState.trendChanges.confirm.weakeningSeverity > 40) {
-        trendStabilityPenalty += 8;
-      }
-    }
-    
-    // 8. 高波动性惩罚（针对ATR过高的币种）
-    const atrRatio = marketState.keyMetrics.atr_ratio;
-    if (atrRatio > 2.0) {
-      volatilityPenalty = 15;
-    } else if (atrRatio > 1.5) {
-      volatilityPenalty = 10;
-    }
-    
-    // 记录惩罚信息
-    if (historicalPenalty > 0 || trendStabilityPenalty > 0 || volatilityPenalty > 0) {
-      logger.info(`${strategyResult.symbol} 评分惩罚: 历史失败-${historicalPenalty}, 趋势不稳-${trendStabilityPenalty}, 高波动-${volatilityPenalty}`);
-    }
-  } catch (error) {
-    logger.error(`计算历史惩罚失败:`, error);
-    // 出错时使用基础评分，不应用惩罚
-  }
-  
-  // 计算总分并应用惩罚
+
+  // 历史失败惩罚已禁用
+  // let historicalPenalty = 0;
+  // let trendStabilityPenalty = 0;
+  // let volatilityPenalty = 0;
+
+  // try {
+  //   const lossStats = await getSymbolLossStats(strategyResult.symbol);
+  //   historicalPenalty = calculateHistoricalLossPenalty(lossStats);
+  //
+  //   // 趋势稳定性惩罚（已禁用）
+  //   if (marketState.trendChanges) {
+  //     if (marketState.trendChanges.primary.weakeningSeverity > 40) {
+  //       trendStabilityPenalty += 10;
+  //     }
+  //     if (marketState.trendChanges.confirm.weakeningSeverity > 40) {
+  //       trendStabilityPenalty += 8;
+  //     }
+  //   }
+  //
+  //   // 高波动性惩罚（已禁用）
+  //   const atrRatio = marketState.keyMetrics.atr_ratio;
+  //   if (atrRatio > 2.0) {
+  //     volatilityPenalty = 15;
+  //   } else if (atrRatio > 1.5) {
+  //     volatilityPenalty = 10;
+  //   }
+  //
+  //   if (historicalPenalty > 0 || trendStabilityPenalty > 0 || volatilityPenalty > 0) {
+  //     logger.info(`${strategyResult.symbol} 评分惩罚: 历史失败-${historicalPenalty}, 趋势不稳-${trendStabilityPenalty}, 高波动-${volatilityPenalty}`);
+  //   }
+  // } catch (error) {
+  //   logger.error(`计算历史惩罚失败:`, error);
+  // }
+
+  // 计算总分（不应用惩罚）
   const baseScore = signalScore + trendScore + volatilityScore + rrScore + liquidityScore;
-  const totalScore = Math.max(0, baseScore - historicalPenalty - trendStabilityPenalty - volatilityPenalty);
+  const totalScore = baseScore;
   
   // 记录评分明细日志
   logger.debug(`${strategyResult.symbol} 评分明细 [策略: ${currentStrategy}]:`, {
@@ -525,14 +523,14 @@ export async function scoreAndRankOpportunities(
       logger.warn(`未找到 ${result.symbol} 的市场状态，跳过评分`);
       continue;
     }
-    
-    // 检查币种是否在冷静期
-    const cooldownCheck = await isSymbolInCooldown(result.symbol);
-    if (cooldownCheck.inCooldown) {
-      logger.warn(`${result.symbol} 在冷静期中，跳过评分。原因: ${cooldownCheck.reason}，剩余${cooldownCheck.remainingHours}小时`);
-      continue;
-    }
-    
+
+    // 冷静期检查已禁用
+    // const cooldownCheck = await isSymbolInCooldown(result.symbol);
+    // if (cooldownCheck.inCooldown) {
+    //   logger.warn(`${result.symbol} 在冷静期中，跳过评分。原因: ${cooldownCheck.reason}，剩余${cooldownCheck.remainingHours}小时`);
+    //   continue;
+    // }
+
     const score = await scoreOpportunity(result, marketState, currentStrategy);
     
     // 只保留评分达标的机会
